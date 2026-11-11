@@ -1,0 +1,10 @@
+# Thryvals: write-ups from building Thryve.
+# GitHub Pages builds this site with Jekyll on every push to main.
+title: Thryvals
+description: Write-ups from building Thryve
+theme: minima
+plugins:
+  - jekyll-feed
+  - jekyll-seo-tag
+exclude:
+  - README.md

@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 304" width="760" height="304" role="img" aria-label="Tasks, results and notifications all go through the engine" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="engine-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#8c959f"/>
+    </marker>
+  </defs>
+  <rect width="760" height="304" fill="#ffffff"/>
+  <text x="24" y="34" font-size="15" font-weight="600" fill="#1f2328">Tasks, results and notifications all go through the engine</text>
+
+  <!-- The engine, around the queue, the workers and the wait tables -->
+  <rect x="264" y="72" width="472" height="208" rx="8" fill="#f6f8fa" stroke="#8c959f" stroke-width="1.25"/>
+  <text x="280" y="96" font-weight="600" fill="#1f2328">Engine</text>
+
+  <!-- Arrows -->
+  <g fill="none" stroke="#8c959f" stroke-width="1.25">
+    <path d="M168 132H280" marker-end="url(#engine-arrow)"/>
+    <path d="M420 132H580" marker-end="url(#engine-arrow)"/>
+    <path d="M650 160V236H570" marker-end="url(#engine-arrow)"/>
+    <path d="M430 236H350V160" marker-end="url(#engine-arrow)"/>
+    <path d="M264 228H168" marker-end="url(#engine-arrow)"/>
+    <path d="M168 262H300V160" marker-end="url(#engine-arrow)"/>
+  </g>
+
+  <!-- Plugins -->
+  <rect x="24" y="104" width="144" height="56" rx="8" fill="none" stroke="#8c959f" stroke-width="1.25"/>
+  <text x="96" y="128" text-anchor="middle" font-weight="600" fill="#1f2328">Plugins</text>
+  <text x="96" y="144" text-anchor="middle" font-size="11.5" fill="#59636e">send tasks</text>
+
+  <!-- Observers -->
+  <rect x="24" y="208" width="144" height="72" rx="8" fill="none" stroke="#8c959f" stroke-width="1.25"/>
+  <text x="96" y="232" text-anchor="middle" font-weight="600" fill="#1f2328">Observers</text>
+  <text x="96" y="248" text-anchor="middle" font-size="11.5" fill="#59636e">get notifications,</text>
+  <text x="96" y="264" text-anchor="middle" font-size="11.5" fill="#59636e">send tasks</text>
+
+  <!-- Task queue -->
+  <rect x="280" y="104" width="140" height="56" rx="8" fill="none" stroke="#8c959f" stroke-width="1.25"/>
+  <text x="350" y="128" text-anchor="middle" font-weight="600" fill="#1f2328">Task queue</text>
+  <text x="350" y="144" text-anchor="middle" font-size="11.5" fill="#59636e">by priority</text>
+
+  <!-- Worker threads -->
+  <rect x="580" y="104" width="140" height="56" rx="8" fill="none" stroke="#8c959f" stroke-width="1.25"/>
+  <text x="650" y="128" text-anchor="middle" font-weight="600" fill="#1f2328">Worker threads</text>
+  <text x="650" y="144" text-anchor="middle" font-size="11.5" fill="#59636e">run the tasks</text>
+
+  <!-- Wait tables -->
+  <rect x="430" y="208" width="140" height="56" rx="8" fill="none" stroke="#8c959f" stroke-width="1.25"/>
+  <text x="500" y="232" text-anchor="middle" font-weight="600" fill="#1f2328">Wait tables</text>
+  <text x="500" y="248" text-anchor="middle" font-size="11.5" fill="#59636e">follow-ups wait</text>
+
+  <!-- Arrow labels -->
+  <g font-size="11.5" fill="#59636e">
+    <text x="216" y="124" text-anchor="middle">tasks</text>
+    <text x="500" y="124" text-anchor="middle">highest priority first</text>
+    <text x="658" y="200">results</text>
+    <text x="358" y="196">inputs ready</text>
+    <text x="216" y="220" text-anchor="middle">notifications</text>
+    <text x="216" y="254" text-anchor="middle">tasks</text>
+  </g>
+</svg>
