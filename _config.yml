@@ -8,3 +8,6 @@ plugins:
   - jekyll-seo-tag
 exclude:
   - README.md
+# GitHub builds the site on UTC time, where it can still be the day before a post's date.
+# Publish such posts anyway, so a post appears as soon as it's pushed.
+future: true
