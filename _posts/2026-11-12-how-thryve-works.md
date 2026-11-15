@@ -9,7 +9,7 @@ This write-up follows a program through Thryve from start to finish: starting an
 
 ## Starting an engine
 
-A program starts Thryve in one of two ways. Interactively, someone starts it from a command prompt or by double-clicking it, and it runs until a task ends the run. As a Windows service, it runs in the background under Windows' service manager. Both start the same engine, with the same plugins and observers.
+A program starts Thryve in one of two ways: interactively, from a command prompt or by double-clicking it, and it runs until a task ends the run, or via a Windows service, running in the background under Windows' service manager. Both start the same engine.
 
 In interactive mode, a program loads its configuration, gets a context from it, adds its plugins and observers, and runs it:
 
@@ -45,9 +45,9 @@ fn main() {
 
 `Images` is a plugin and `Progress` an observer; both come up below. `run_interactive` creates the run's log folder, starts the worker threads and the observers, loads the plugins, and returns the engine's thread. Joining that thread waits until the run ends.
 
-The configuration file must set every option: a missing or unknown key is an error, reported with its line, and `Config::load_def_config()` gives the defaults instead. Each plugin and observer gets a `PacketHandle`, its way to send work to the engine. The handle refuses work until the engine exists, since nothing would read it before that: start Thryve, then send.
+The configuration file must set every option: a missing or unknown key is an error, reported with its line. `Config::load_def_config()` loads with the defaults instead. Each plugin and observer gets a `PacketHandle`: Thryve's way to send work to the engine. The handle refuses work until the engine exists, since nothing would read it before that: start Thryve, then send.
 
-As a Windows service, the same program makes two different calls:
+As a Windows service, the calls change from `summon_requirements` and `run_interactive` to `create_service` and `try_run_as_service`:
 
 ```rust
 let (service, mut ctx) = run_service::create_service(config);
@@ -61,11 +61,11 @@ if let Err(error) = run_service::try_run_as_service(service, ctx) {
 }
 ```
 
-The configuration's `[service]` section says whether the service accepts Stop, and Pause and Resume. Pause holds the engine's work until Resume, and Stop shuts the engine down.
+The configuration's `[service]` section says whether the service accepts Stop, and Pause and Resume.
 
 ## Plugins
 
-A plugin is a self-contained part of a program: an image library, a report, a nightly backup. It has a type name, unique within an engine, an entry point and a clean-up. The entry point runs once, on a worker thread, when the engine starts, and it's where a plugin sends its first tasks; the clean-up runs when the engine shuts down.
+A plugin is a self-contained part of a program. Examples of that can be an image library, a report, a nightly backup, etc.... Each plugin contains the functions that serve the purpose of that specific plugin. Each plugin has an entry point (a task) that runs once. It can go in two directions: either that entry point runs a real function that starts spinning the program and sending other tasks, maybe even from different plugins, or it runs a function that returns only a TaskResult, whose message, something like "Images is ready", goes to the log.
 
 Here's `Images`, the plugin added above. Its entry point sends one task, `clear_cache`, which the next part shows:
 
@@ -101,13 +101,11 @@ impl PlgLogic for Images {
 }
 ```
 
-The entry point is a task itself, so it returns a task result, the subject of the next part. After it, a plugin's other functions can send tasks at any time through its `PacketHandle`, whether they're called from its own tasks or from the program around it.
-
 Because a plugin is self-contained, a program can take one, or a bundle of plugins that work together, and use it without changing its code: the program adds it to the context, and the plugin does its part. A second plugin is one more `push`.
 
 ## Plain tasks
 
-The simplest unit of work is a plain task: a name, a priority and a closure. The closure returns a `TaskResult`, which has three parts: a result type, a message, and the log file the message goes to.
+The simplest unit of work is a plain task: a name, a priority and a closure that returns a `TaskResult`:
 
 ```rust
 use thryve::utils::packets::task::Task;
@@ -121,10 +119,6 @@ fn clear_cache(handle: &PacketHandle) -> Result<(), ThryveError> {
 }
 ```
 
-- **The result type** is a word you pick, such as Done, Skipped or Failed. Two words are special: `Fin` ends the run, and `FinErr` ends it after an error.
-- **The message** goes to the log file named last. `Main` is Thryve's own; a program adds others to `ctx.logging_file_names` before it starts. Each run's logs go in a folder of their own.
-- **The priority** decides which waiting task a free worker takes first: higher goes first. More on that in "Inside the engine".
-
 A plain task can also start the next one. `chain` puts a task on the result, and the engine sends it once this one is done:
 
 ```rust
@@ -134,7 +128,8 @@ fn resize_then_save(handle: &PacketHandle) -> Result<(), ThryveError> {
     })?;
     let resize = Task::new("Resize", 2, move || {
         // `chain` puts Save on Resize's result: the engine sends Save once Resize is done.
-        TaskResult::new("Done", "photo resized".to_string(), "Main").chain(save)
+        TaskResult::new("Done", "photo resized".to_string(), "Main")
+            .chain(save)
     })?;
     handle.send_task(resize)
 }
@@ -144,9 +139,9 @@ Plain tasks suit fire-and-forget work: clearing a cache, writing a file, sending
 
 ## Where plain tasks fall short
 
-Plain tasks work well until one step needs what another one produced. Take an image library that hashes a file, then loads the image with that digest. Three problems show up.
+Plain tasks work well until one step needs what another one produced. Take a hypothetical Image plugin that hashes a file, then loads the image with that digest. Three problems show up.
 
-**1- Nothing is handed on:** A plain task's result is a word and a log line, not a value. To give the digest to the next step, Hash has to build that step itself, with the digest inside it, and chain it:
+**1- Nothing is handed on:** A plain task's result is a word and a log line, not a value. To give the digest to the next step, Hash has to build that step itself, with the digest inside it, and chain it, making Hash depend on LoadImg, so nothing else can use its digest without changing Hash's code:
 
 ```rust
 fn hash_then_load_plain(handle: &PacketHandle, path: PathBuf) -> Result<(), ThryveError> {
@@ -204,7 +199,7 @@ These three problems are why Thryve also has advanced tasks.
 
 ## Advanced tasks
 
-An advanced task (`AdvTask`, called a typed task in the API docs) returns a `Result`: a value, or an error of its own type. Sending one gives back a handle, and `then` on the handle declares the step that follows. When the task finishes, the engine hands its value or its error to that step, as a `Handoff`.
+An advanced task (`AdvTask`, called a typed task in the API docs) returns a `Result`: a value, or an error of its own type. When an `AdvTask` is sent, it gives back a handle, and `then` on the handle declares the step that follows. When the task finishes, the engine hands its value or its error to that step, as a `Handoff`.
 
 That changes who decides what comes next. A plugin offers its advanced tasks as functions that send a task and return its handle, and the program that uses the plugin declares what follows:
 
@@ -234,19 +229,15 @@ fn open_photo(handle: &PacketHandle, path: PathBuf) -> Result<(), ThryveError> {
 
 Hash doesn't know what follows it. Another program can follow it with an upload or a comparison, and the Hasher plugin stays as it is. The error travels too: if the file can't be read, LoadImg gets Hash's own error, with its type, and passes it on.
 
-- **The result waits for its follow-up:** The engine keeps a task's result until a step is declared after it, so `then` works before or after the task finishes.
-- **Steps chain:** `then` returns the follow-up's handle, so LoadImg can be followed by Save, and Save by Upload.
-- **One follow-up per task:** `then` uses the handle up. To give one result to several steps, there's fan-out, in the next part.
-- **Errors aren't lost:** A handle dropped without a follow-up lets its result go: a value is dropped, and an error is written to `Error.log`.
-- **Priority:** A follow-up inherits its task's priority, and `then_with_priority` gives it one of its own.
+When working with advanced tasks, the engine keeps a task's result until a step is declared after it, so `then` works before or after the task finishes. `then` returns the follow-up's handle. A follow-up is the task that is declared by `then`. Returning the follow-up's handle means LoadImg can be followed by Save, and Save followed by Upload. `then` uses the handle up. To give one result to several steps, there's fan-out, in the next part. A handle dropped without a follow-up lets its result go: a value is dropped, and an error is written to `Error.log`. A follow-up inherits its task's priority, and `then_with_priority` allows for priority override.
 
 Plain tasks are still there, for work that hands nothing on.
 
 ## Splitting, joining and fanning out
 
-`then` links one step to the next. Three more shapes cover the rest: one job cut over several tasks, one step after several, and several steps after one.
+`then` links one step to the next. Three more shapes cover the rest: cutting one job over several tasks, merging several tasks into one that processes the results of these several ones, and giving the same result to several different tasks.
 
-**Split and join:** `split_into` cuts a list into pieces and sends one advanced task per piece, each running the same function on its share. It returns their handles, in order, and `join` declares one step that runs once all of them are done, with every value in that order. Here's the photo from before, without the counter:
+Splitting and joining are the first two shapes. `split_into` cuts a list into pieces and sends one advanced task per piece, each running the same function on its share. It returns their handles, in order, and `join` declares one step that runs once all of them are done, with every value in that order. Here's the photo from before, without the counter:
 
 ```rust
 fn resize_photo(handle: &PacketHandle, rows: Vec<Row>) -> Result<(), ThryveError> {
@@ -265,7 +256,9 @@ fn resize_photo(handle: &PacketHandle, rows: Vec<Row>) -> Result<(), ThryveError
 
 A join fails fast: when one piece fails, Stitch runs at once with that error, and the pieces that haven't started are cancelled. `join` works on any list of handles of one type, not only those from `split_into`, and a join can itself be one of the tasks of another join.
 
-**Fan-out:** Several steps can share one result. `fan_out` turns a handle into a group, `then` on the group adds each step, and `send_fanout` sends them:
+Splitting comes with its costs. Every piece is a task, with its own trip through the queue, and every join adds one more. Splitting finer than the work needs adds that cost without making anything faster, so it's a tradeoff between how big each task is and how many tasks there are.
+
+The final shape is fan-out. Several steps can share one result. `fan_out` turns a handle into a group, `then` on the group adds each step, and `send_fanout` sends them:
 
 ```rust
 fn photo_opened(handle: &PacketHandle) -> Result<(), ThryveError> {
@@ -288,11 +281,9 @@ fn photo_opened(handle: &PacketHandle) -> Result<(), ThryveError> {
 
 Every step in the group reads the same result, not a copy, and the steps can run at the same time on different workers.
 
-**Splitting has a cost:** Every piece is a task, with its own trip through the queue, and every join adds one more. Splitting finer than the work needs adds that cost without making anything faster, so aim for enough pieces to keep the workers busy, each big enough to be worth a task.
+## Forwarding
 
-## Forwarding and cancelling
-
-**Forwarding:** Sometimes a task only knows its last step once it runs. A task made with `AdvTask::forward` creates that step while it runs and returns its handle, and whoever follows the task gets that step's result:
+Sometimes a task only knows its last step once it runs. A task made with `AdvTask::forward` creates that step while it runs and returns its handle, and whoever follows the task gets that step's result:
 
 ```rust
 fn prepare_photo(handle: &PacketHandle) -> Result<(), ThryveError> {
@@ -316,9 +307,11 @@ fn prepare_photo(handle: &PacketHandle) -> Result<(), ThryveError> {
 }
 ```
 
-No worker waits for the forwarded step: Prepare finishes as soon as its closure returns, and the engine makes Prepare's follow-up wait instead. When the steps are known up front, `then` is the simpler way.
+No worker waits for the forwarded step. Prepare finishes as soon as its closure returns, and the engine makes Prepare's follow-up wait instead. When the steps are known up front, `then` is the simpler way.
 
-**Cancelling:** `cancel` on a handle stops a task that hasn't started: the worker that takes it skips it.
+## Cancelling
+
+`cancel` on a handle stops a task that hasn't started: the worker that takes it skips it.
 
 ```rust
 fn photo_closed(handle: &PacketHandle) -> Result<(), ThryveError> {
@@ -331,13 +324,11 @@ fn photo_closed(handle: &PacketHandle) -> Result<(), ThryveError> {
 }
 ```
 
-- **The work only it needed stops too:** If Save follows LoadImg, which follows Hash, cancelling Save also cancels LoadImg and Hash, as long as they haven't started. Cancelling a join cancels the tasks it waits for, and `cancel_all` cancels a whole list, such as the pieces from `split_into`.
-- **A running task finishes:** Its result is let go: a value is dropped, and an error is still written to `Error.log`.
-- **Quiet:** Cancelling never fails and writes nothing to the logs.
+If Save follows LoadImg, which follows Hash, cancelling Save also cancels LoadImg and Hash, as long as they haven't started. Cancelling a join cancels the tasks it waits for, and `cancel_all` cancels a whole list, such as the pieces from `split_into`. If the task is already running when it's cancelled, it is kept running since there is no way to stop it, but its result is let go. Cancelling never fails and writes nothing to the logs.
 
 ## Observers
 
-An observer runs on a thread of its own for the whole run, and receives notifications: messages addressed to it by its type name. A plugin, a task, the program or another observer can send one, from anywhere that holds a `PacketHandle`, and a notification can carry any type of yours:
+An observer runs on a thread of its own for the whole run, and receives notifications: messages addressed to it by its type name. A plugin, a task, the program or another observer can send one, from anywhere that holds a `PacketHandle`, and a notification can carry any type that implements the `NotifLogic` trait:
 
 ```rust
 use std::sync::Arc;
@@ -364,7 +355,7 @@ fn photo_done(handle: &PacketHandle, name: String) -> Result<(), ThryveError> {
 }
 ```
 
-The engine passes each notification to a sorter thread, which puts it in its observer's queue. `Progress`, the observer added at the start, takes them one at a time:
+The engine passes each notification to a sorter thread, which puts it in its observer's queue. `Progress`, the observer added in the very first code block of this write-up, takes them one at a time:
 
 ```rust
 struct Progress;
@@ -395,31 +386,30 @@ impl ObsLogic for Progress {
 
 A task runs once, on whichever worker is free, and is done. An observer stays for the whole run and sees its notifications one at a time, so it can keep state between them, like the count above, without a lock. That makes observers the place for:
 
-- **Showing what happens:** printing, a window, a status page. In the example below, Console prints the reports.
-- **Keeping state across many events:** counting, collecting results that arrive from different tasks, noticing when the last one is in.
-- **Logging:** Thryve's own logger is an observer, and every result's message reaches it as a notification.
-- **Reacting:** an observer holds a `PacketHandle`, so it can send tasks when something happens. Console ends the run with a `Fin` task once every report is in.
+- Showing what happens: printing, a window, a status page. In the example below, Console prints the reports.
+- Keeping state across many events: counting, collecting results that arrive from different tasks, noticing when the last one is in.
+- Logging: Thryve's own logger is an observer, and every result's message reaches it as a notification.
+- Reacting: an observer holds a `PacketHandle`, so it can send tasks when something happens. Console ends the run with a `Fin` task once every report is in.
 
 An observer's notifications wait while it's busy, so long work belongs in tasks, which the observer can send.
 
 ## Inside the engine
 
-Everything a program sends goes through the engine, which owns the worker threads. The drawing follows the work from the moment it's sent:
+Everything a program sends goes through the engine, which owns the worker threads. 
 
-![Tasks, results and notifications all go through the engine]({{ "/assets/engine.svg" | relative_url }})
-
-1. **Mailboxes:** Every task, notification and result lands in one of four mailboxes, which only the engine reads, in the same order each turn: Thryve's own status messages first, then tasks, notifications and results.
-2. **The queue:** Tasks wait in a priority queue, and a free worker takes the one with the highest priority.
-3. **The workers:** run the tasks, skip the cancelled ones, and report each result back to the engine.
-4. **The wait tables:** A follow-up, a join or a fan-out step waits there until its inputs arrive. Then it joins the queue like any other task.
-5. **The observers:** Notifications go to a sorter thread, which puts each in its observer's queue.
+1. Mailboxes: Every task, notification and result lands in one of four mailboxes, which only the engine reads, in the same order each turn: Thryve's own status messages first, then tasks, notifications and results.
+2. The queue: Tasks wait in a priority queue, and a free worker takes the one with the highest priority.
+3. The workers: run the tasks, skip the cancelled ones, and report each result back to the engine.
+4. The wait tables: A follow-up, a join or a fan-out step waits there until its inputs arrive. Then it joins the queue like any other task.
+5. The observers: Notifications go to a sorter thread, which puts each in its observer's queue.
 
 Priorities run from 0 up to `max_priority` in the configuration, which is 4 by default and 14 at most, and higher goes first. Two rules shape that order:
 
-- **Realtime.** The top levels, from 80% of `max_priority` rounded down, are realtime: those tasks always go before the others. With the defaults, that's priorities 3 and 4.
-- **Ageing.** A waiting task gains one level every `aging_interval` seconds, 3 by default, so low-priority work still gets its turn on a busy engine. Ageing never makes a task realtime.
+The first rule is having a Realtime Zone. The top levels, from 80% of `max_priority` rounded down, are realtime. Those tasks always go before the others. With the defaults, that's priorities 3 and 4.
 
-A follow-up inherits its task's priority and a join takes the highest among its tasks, but neither inherits realtime: with the defaults, an inherited priority stops at 2. The configuration sets the rest, such as the number of workers:
+The second rule answers how ageing works to prevent starvation. A waiting task gains one level every `aging_interval` seconds, 3 by default, so low-priority work still gets its turn on a busy engine. Ageing never makes a task cross into the Realtime Zone. This means that even if a task is fully aged, tasks with realtime priorities run first.
+
+A follow-up inherits its parent task's base priority (the priority level before any aging) and a join takes the highest among its tasks, but neither inherits realtime: with the defaults, an inherited priority stops at 2. The configuration sets the rest, such as the number of workers:
 
 ```toml
 [threads]
@@ -432,7 +422,7 @@ aging_interval = 3
 
 ## How a run ends
 
-A run ends when a task's result type is `Fin`, or `FinErr` after an error. Any plugin, observer or task can send that task; in the example below, Console does, once every report is printed:
+A run ends when a task's result type is `Fin` once the work is done, or `FinErr` after an error. Any plugin, observer or task can send that task; in the example below, Console does, once every report is printed:
 
 ```rust
 fn end_the_run(handle: &PacketHandle) -> Result<(), ThryveError> {
@@ -443,10 +433,9 @@ fn end_the_run(handle: &PacketHandle) -> Result<(), ThryveError> {
 }
 ```
 
-- **Shutting down:** The engine stops taking new work and waits for the tasks still running, up to `shutdown_grace_period` (10 seconds by default). Then the plugins' and observers' clean-ups run, and in interactive mode `engine.join()` returns. A task still running after the grace period is named in `Error.log` and left behind, and the plugins aren't cleaned up.
-- **The logs:** Each run's log folder holds the `Main` log, the logs the program registered, and `Error.log`: errors no step took, work that never ran, a start that failed, and warnings from graph mode.
-- **Panics:** A panic in any task ends the whole process: Thryve writes it to `Error.log` and exits with code 1.
-- **The task graph:** With debugging and `visual_graph` on, Thryve records which line of code sent each task, and which task it came from. At shutdown it exports that graph and opens it in Topology, a program on Thryve's release page that goes next to your program's `.exe`.
+When shutdown starts, the engine stops taking new work and waits for the tasks still running, up to `shutdown_grace_period` field in the configuration (10 seconds by default). Then the plugins' and observers' clean-ups run, and in interactive mode `engine.join()` returns. A task still running after the grace period is named in `Error.log` and left behind, and the plugins aren't cleaned up.
+
+Each run's log folder holds the `Main` log, the logs the program registered, and `Error.log`: errors no step took, work that never ran, a start that failed, and warnings from graph mode. A panic in any task ends the whole process: Thryve writes it to `Error.log` and exits with code 1. With debugging and `visual_graph` on, Thryve records which line of code sent each task, and which task it came from. At shutdown it exports that graph and opens it in Topology, a program on Thryve's release page that goes next to your program's `.exe`.
 
 ## The example
 
@@ -521,10 +510,10 @@ fn declare_report(tx: &PacketHandle, lines: Vec<String>) -> Result<(), Box<dyn E
 }
 ```
 
-- **Parse:** `split_into` cuts the lines into 8 pieces and sends a Parse task for each, as in "Splitting, joining and fanning out".
-- **Merge:** `join` declares Merge, which runs once all 8 Parse tasks are done, with their counts in order.
-- **The four sections:** `fan_out` shares Merge's counts with Totals, StatusCodes, TopPages and Alerts, which can run side by side.
-- **Report:** A second `join` declares Report, which puts the four sections together and sends the text to Console as a notification.
+- Parse: `split_into` cuts the lines into 8 pieces and sends a Parse task for each, as in "Splitting, joining and fanning out".
+- Merge: `join` declares Merge, which runs once all 8 Parse tasks are done, with their counts in order.
+- The four sections: `fan_out` shares Merge's counts with Totals, StatusCodes, TopPages and Alerts, which can run side by side.
+- Report: A second `join` declares Report, which puts the four sections together and sends the text to Console as a notification.
 
 Each step is an ordinary function, and nothing in it waits or locks: `parse` takes its share of the lines and returns `Result<Counts, io::Error>`. Counting can't fail here, but an error would travel the way "Advanced tasks" describes: Merge would pass it on to the four sections, and Report would send "The report failed: …" to Console in place of the sections.
 
@@ -566,24 +555,26 @@ Neither project names the other. All they share is a notification: a project's n
 
 Both projects' tasks go into the one queue from "Inside the engine", and the engine's 4 worker threads take their work from it. The number of workers is one line in the configuration file the examples share: `worker_count = 4`.
 
-- **The report goes first:** Its tasks have priority 2 and the prime count's have priority 1, so when tasks of both are waiting, a free worker takes the report's. Each follow-up keeps the priority of the step before it, and neither project uses the realtime levels.
-- **The prime count still gets its turn:** A waiting task gains one level every 3 seconds (`aging_interval`), so on a busy engine the Sieve tasks would catch up with the report's. In this example the queue empties long before any task has waited that long.
+Both projects' tasks have a priority of 2. Each follow-up keeps the priority of the step before it, and neither project uses the realtime levels. A waiting task gains one level every 3 seconds (`aging_interval`), so on a busy engine tasks waiting with lower priority would catch up with the report's and the Sieve tasks. In this example the queue empties long before any task has waited that long.
 
 ## What one engine costs
 
 Sharing an engine means sharing more than its workers:
 
-- **One project's `FinErr` ends both:** If LogReader can't read the log, its entry point returns `FinErr` and the engine stops, so the prime count never prints either.
-- **One place decides when the run is over:** A `Fin` ends the engine for every project in it, so the projects need one decider. Here, that's Console.
-- **A panic ends the whole process,** whichever project it came from. Thryve writes it to `Error.log` and exits with code 1.
-- **One configuration:** The projects share the number of workers, the maximum priority levels and the ageing interval.
+1- One project's `FinErr` ends the entire run. If LogReader can't read the log, its entry point returns `FinErr` and the engine stops, so the prime count never prints either.
+
+2- One place decides when the run is over. A `Fin` ends the engine for every project in it, so the projects need one decider. Here, that's Console.
+
+3- A panic ends the whole process, whichever project it came from. Thryve writes it to `Error.log` and exits with code 1.
+
+4- The projects share the same configuration: the number of workers, the maximum priority levels and the ageing interval.
 
 ## Not only Rust
 
 The same `projects` program is in the repo in C, C++ and Python, and all four print the same output from the same log. They call Thryve through its C API:
 
-- **C and C++:** use the C library, with its C and C++ headers, built with CMake or GNU Make. With MSVC, CMake can also build Thryve into each program, which then runs without the DLL.
-- **Python:** uses `thryve.py`, the C API through `ctypes`: standard library only, nothing to install. It loads the DLL, since `ctypes` can't load a static library.
+- C and C++: use the C library, with its C and C++ headers, built with CMake or GNU Make. With MSVC, CMake can also build Thryve into each program, which then runs without the DLL.
+- Python: uses `thryve.py`, the C API through `ctypes`: standard library only, nothing to install. It loads the DLL, since `ctypes` can't load a static library.
 
 Every number in the reports is worked out with whole numbers, and every list is sorted the same way, so the four languages agree to the last character. The [C++ guide](https://github.com/thryveframework/thryve/blob/main/crates/thryve_ffi/docs/cpp-dev-guide.md) and the [Python guide](https://github.com/thryveframework/thryve/blob/main/crates/thryve_ffi/docs/python-dev-guide.md) show how to write programs like these.
 
